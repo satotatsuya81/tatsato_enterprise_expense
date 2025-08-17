@@ -1,0 +1,150 @@
+services:
+  # Authentication Service - Production
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+      target: production
+    container_name: expense-auth-service-prod
+    ports:
+      - "8001:8001"
+    environment:
+      # Database configuration (use external RDS in AWS)
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_SSL_MODE=require
+      
+      # Redis configuration (use external ElastiCache in AWS)
+      - REDIS_URL=${REDIS_URL}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # Application configuration
+      - PORT=8001
+      - GIN_MODE=release
+      - LOG_LEVEL=info
+      
+      # JWT configuration
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ACCESS_TOKEN_EXPIRE=${JWT_ACCESS_TOKEN_EXPIRE:-15m}
+      - JWT_REFRESH_TOKEN_EXPIRE=${JWT_REFRESH_TOKEN_EXPIRE:-168h}
+      - JWT_ISSUER=${JWT_ISSUER:-expense-system}
+      
+      # CORS configuration
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+      
+      # AWS configuration
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    networks:
+      - expense_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # BFF Service - Production
+  bff-service:
+    build:
+      context: ./services/bff-service
+      dockerfile: Dockerfile
+      target: production
+    container_name: expense-bff-service-prod
+    ports:
+      - "8000:8000"
+    depends_on:
+      - auth-service
+    environment:
+      - PORT=8000
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - REDIS_URL=${REDIS_URL}
+      - GIN_MODE=release
+      - LOG_LEVEL=info
+      - AWS_REGION=${AWS_REGION}
+    networks:
+      - expense_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Frontend Application - Production
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: expense-frontend-prod
+    ports:
+      - "3000:3000"
+    depends_on:
+      - auth-service
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+    networks:
+      - expense_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Nginx Reverse Proxy - Production
+  nginx:
+    image: nginx:alpine
+    container_name: expense-nginx-prod
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - auth-service
+      - bff-service
+      - frontend
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - expense_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+# Custom network for service communication
+networks:
+  expense_network:
+    driver: bridge
